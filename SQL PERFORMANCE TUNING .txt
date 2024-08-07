@@ -1,0 +1,178 @@
+/* SQL PERFORMANCE TUNING */
+
+-- GET BASIC EXECUTION PLAN
+-- shows CPU cost% and time
+
+-- query to be tuned goes first
+SELECT /*+ gather_plan_statistics */* 
+FROM vehicles
+;
+-- run above query with the bellow to get plan, may need to execute twice to load
+SELECT *
+FROM TABLE(dbms_xplan.display_cursor(:LIVESQL_LAST_SQL_ID));
+
+-- GET SQL ID for a statement
+-- above query uses :LIVESQL_LAST_SQL_ID, to replace this with a static run:
+select sql_id, sql_text
+from   v$sql
+where  sql_text like 'SELECT * %vehicles%'
+/* exclude this query */
+and    sql_text not like '%not this%';
+-- note changing the query at all will create a new ID as it is a hash 
+
+-- VIEW ROWS PROCESSED 
+-- shows how many rows are returned at stages through the query
+-- query to be tuned goes first
+SELECT * 
+FROM vehicles
+;
+-- select the plan for the above query
+SELECT *
+FROM TABLE(dbms_xplan.display_cursor(:LIVESQL_LAST_SQL_ID
+    , format => 'ROWSTATS LAST')); -- format the output to show more data
+-- this shows the E-Rows column, for the db estimate of rows returned
+-- to see ACTUAL rows returned add the hint /*+ gather_plan_statistics */
+SELECT /*+ gather_plan_statistics */*
+FROM   vehicles;
+-- select the plan for the above query
+SELECT * 
+FROM   TABLE(dbms_xplan.display_cursor(:LIVESQL_LAST_SQL_ID, format => 'ROWSTATS LAST'));
+-- this plan also shows STARTS, how many times the query acccessed the table
+
+-- oracle uses stats to order tbls in query execution, these stats are refreshed
+-- when the table has 10% of its data changed, you can check the % using:
+select dbms_stats.get_prefs ( 'STALE_PERCENT', null, 'vehicles' ) from dual;
+-- 10% is default, so vehicles has 51739 records, so 5173 will need to be changed before
+-- these stats are refreshed.
+-- to manually refresh these stats run
+exec dbms_stats.gather_table_stats ( null, 'vehicles' ) ;
+-- ^^ warning, gathering a new plan can cause the database to reevaulate the query 
+-- optimisations used on the table, potentially causing the database to reassess
+-- all querys on the table, which can add significant workload to the database
+-- to prevent this all queries are not done immediatley and happen over time
+-- to execute a new plan immediatley set NO_INVALIDATE to FALSE when gathering
+exec dbms_stats.gather_table_stats ( null, 'vehicles', no_invalidate => false ) ;
+-- Remember: invalidating cursors when gathering stats this will cause the 
+-- optimiser to reparse all queries on this table
+
+-- CREATING EXTENDED STATISTICS 
+-- Define extended stats using dbms_stats as shown:
+select dbms_stats.create_extended_stats ( null, 'vehicles', '(registration, id)' )
+from   dual;
+
+exec dbms_stats.gather_table_stats ( null, 'vehicles', method_opt => 'for columns (registration, id)', no_invalidate => false ) ;
+-- this is requesting extended stats on 'registration' and 'id', any column can be set here
+-- With extended stats in place, the plans should now show the correct row estimates:
+select /*+ gather_plan_statistics */count (*) c
+from   vehicles
+where  id >= 10
+and    registration LIKE 'Y%';
+
+select * 
+from   table(dbms_xplan.display_cursor(:LIVESQL_LAST_SQL_ID, format => 'ROWSTATS LAST'));
+-- estimated rows and actual rows should now be either acurate or much closer estimates
+
+-- CREATING EXTENDED STATISTICS
+select dbms_stats.create_extended_stats ( null, 'vehicles', '(registration, id)' )
+from   dual;
+
+exec dbms_stats.gather_table_stats ( null, 'vehicles', method_opt => 'for columns (registration, id)', no_invalidate => false ) ;
+--With extended stats in place, the plans should now show the correct row estimates:
+select /*+ gather_plan_statistics */count (*) c
+from   vehicles
+where  id >= 10
+and    registration LIKE 'Y%';
+
+select * 
+from   table(dbms_xplan.display_cursor(:LIVESQL_LAST_SQL_ID, format => 'ROWSTATS LAST'));
+
+-- MEASURING WORK DONE
+-- IOSTATS gets the input/output numbers for the query in question
+select /*+ gather_plan_statistics */count(*) from vehicles;
+select *  
+from   table(dbms_xplan.display_cursor(:LIVESQL_LAST_SQL_ID, format => 'IOSTATS LAST'));
+-- buffers column shows the number of read/write operations taken by the query
+select /*+ gather_plan_statistics */count (*) 
+from   vehicles v
+join    models m
+on v.models_id = m.id
+where  v.id >= 10
+and    v.registration LIKE 'Y%';
+select *  
+from   table(dbms_xplan.display_cursor(:LIVESQL_LAST_SQL_ID, format => 'IOSTATS LAST'));
+--The Buffers reported at the top of the plan (step 0) is the total I/O for the query
+-- buffers are calculated cumulitivley from bottom to top, so the highest row id number
+-- in the report is the first report for the I/O of the query
+
+-- HOW MUCH MEMORY HAS BEEN USED 
+-- to show how much data has been read/written in the query 
+select /*+ gather_plan_statistics */count (*) 
+from   vehicles v
+join    models m
+on v.models_id = m.id
+where  v.id >= 10
+and    v.registration LIKE 'Y%';
+select *  
+from   table(dbms_xplan.display_cursor(:LIVESQL_LAST_SQL_ID, format => 'MEMSTATS LAST'));
+-- This adds OMem, 1Mem, and Used-Mem columns to the plan
+-- The OMem and 1Mem figures are estimates. Used-Mem reports how much memory it actually used.
+-- If memory is limited or when processing huge data sets all the rows may not fit in memory. 
+-- In this case the database needs to write the data to disk to complete the operation. 
+-- Oracle Database uses the temporary tablespace to do this.
+
+-- HOW BIG IS THE TABLE / INDEX
+select segment_name, segment_type, bytes
+from   user_segments
+where  segment_name in ( 
+  'VEHICLES' -- change as required, multiple can be used seperated by comma
+);
+
+select /*+ gather_plan_statistics */count (*) 
+from   vehicles v
+join    models m
+on v.models_id = m.id
+where  v.id >= 10
+and    v.registration LIKE 'Y%';
+select *  
+from   table(dbms_xplan.display_cursor(:LIVESQL_LAST_SQL_ID, format => 'IOSTATS LAST'));
+
+-- INDEXING TABLES
+-- adding an index can prevent the whole table being ready from a query
+-- create an index as follows:
+
+-- create index /*name_of_index*/ 
+-- on /*table*/ ( /*column*/ );
+
+-- remove an index: 
+-- drop index /* name of index*/; 
+
+-- view an index
+-- select * from user_indexes
+-- where  table_name = '/*name of table*/';
+
+-- view all index with columns
+-- select index_name, column_name, column_position 
+-- from   user_ind_columns
+-- where  table_name = '/*name of table*/'
+-- order  by index_name, column_position;
+
+-- HISTOGRAMS NOT CURRENTLY WORKING IN OUR SYSTEM
+-- THESE CAN BE USED TO OPTIMISE QUERIES WHEN ENABLED
+-- CHECKING HISTOGRAMS
+--select utcs.column_name, utcs.histogram, utcs.num_buckets
+--from   user_tables ut
+--join   user_tab_col_statistics utcs
+--on     ut.table_name = utcs.table_name
+--where  ut.table_name = 'vehicles'
+--and    utcs.column_name in ( 'registration', 'id' );
+--
+--GATHERING HISTOGRAMS
+--exec dbms_stats.gather_table_stats ( null, 'vehicles', no_invalidate => false );
+--
+--select utcs.column_name, utcs.histogram, utcs.num_buckets
+--from   user_tables ut
+--join   user_tab_col_statistics utcs
+--on     ut.table_name = utcs.table_name
+--where  ut.table_name = 'vehicles'
+--and    utcs.column_name in ( 'registration', 'id' );
+
