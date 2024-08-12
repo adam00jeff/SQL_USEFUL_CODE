@@ -11,6 +11,9 @@ FROM vehicles
 SELECT *
 FROM TABLE(dbms_xplan.display_cursor(:LIVESQL_LAST_SQL_ID));
 
+--alternatley:
+select plan_table_output from table ( sys.dbms_xplan.display_cursor( '','','ADVANCED ALLSTATS LAST'));
+
 -- GET SQL ID for a statement
 -- above query uses :LIVESQL_LAST_SQL_ID, to replace this with a static run:
 select sql_id, sql_text
@@ -32,8 +35,10 @@ FROM TABLE(dbms_xplan.display_cursor(:LIVESQL_LAST_SQL_ID
     , format => 'ROWSTATS LAST')); -- format the output to show more data
 -- this shows the E-Rows column, for the db estimate of rows returned
 -- to see ACTUAL rows returned add the hint /*+ gather_plan_statistics */
+
 SELECT /*+ gather_plan_statistics */*
 FROM   vehicles;
+
 -- select the plan for the above query
 SELECT * 
 FROM   TABLE(dbms_xplan.display_cursor(:LIVESQL_LAST_SQL_ID, format => 'ROWSTATS LAST'));
@@ -46,6 +51,7 @@ select dbms_stats.get_prefs ( 'STALE_PERCENT', null, 'vehicles' ) from dual;
 -- these stats are refreshed.
 -- to manually refresh these stats run
 exec dbms_stats.gather_table_stats ( null, 'vehicles' ) ;
+
 -- ^^ warning, gathering a new plan can cause the database to reevaulate the query 
 -- optimisations used on the table, potentially causing the database to reassess
 -- all querys on the table, which can add significant workload to the database
@@ -77,6 +83,7 @@ select dbms_stats.create_extended_stats ( null, 'vehicles', '(registration, id)'
 from   dual;
 
 exec dbms_stats.gather_table_stats ( null, 'vehicles', method_opt => 'for columns (registration, id)', no_invalidate => false ) ;
+
 --With extended stats in place, the plans should now show the correct row estimates:
 select /*+ gather_plan_statistics */count (*) c
 from   vehicles
@@ -100,6 +107,7 @@ where  v.id >= 10
 and    v.registration LIKE 'Y%';
 select *  
 from   table(dbms_xplan.display_cursor(:LIVESQL_LAST_SQL_ID, format => 'IOSTATS LAST'));
+
 --The Buffers reported at the top of the plan (step 0) is the total I/O for the query
 -- buffers are calculated cumulitivley from bottom to top, so the highest row id number
 -- in the report is the first report for the I/O of the query
@@ -136,25 +144,189 @@ and    v.registration LIKE 'Y%';
 select *  
 from   table(dbms_xplan.display_cursor(:LIVESQL_LAST_SQL_ID, format => 'IOSTATS LAST'));
 
+-- gatherig ADAPTIVE PLANT STATISTICS
+-- To see which joins the optimizer considered, get the plan with the +ADAPTIVE format:
+select * 
+from   table(dbms_xplan.display_cursor(:LIVESQL_LAST_SQL_ID, format => 'IOSTATS LAST +ADAPTIVE'));
+
 -- INDEXING TABLES
 -- adding an index can prevent the whole table being ready from a query
 -- create an index as follows:
 
--- create index /*name_of_index*/ 
--- on /*table*/ ( /*column*/ );
+create index /*name_of_index*/ 
+on /*table*/ ( /*column*/ );
 
 -- remove an index: 
--- drop index /* name of index*/; 
+drop index /* name of index*/; 
 
 -- view an index
--- select * from user_indexes
--- where  table_name = '/*name of table*/';
+select * from user_indexes
+where  table_name = '/*name of table*/';
 
 -- view all index with columns
--- select index_name, column_name, column_position 
--- from   user_ind_columns
--- where  table_name = '/*name of table*/'
--- order  by index_name, column_position;
+select index_name, column_name, column_position 
+from   user_ind_columns
+where  table_name = '/*name of table*/'
+order  by index_name, column_position;
+
+--You can view the clustering factor by querying the *_INDEXES views:
+select index_name, clustering_factor, ut.num_rows, ut.blocks
+from   user_indexes ui
+join   user_tables ut
+on     ui.table_name = ut.table_name
+where  ui.table_name = '/*tbl name*/';
+
+-- find the TABLE_CACHED_BLOCKS preference number
+select dbms_stats.get_prefs ( 'table_cached_blocks', null, '/*tbl name*/' ) 
+from   dual;
+
+-- increase the TABLE_CACHED_BLOCKS number
+begin 
+  dbms_stats.set_table_prefs ( 
+    null, '/*tbl name*/', 'table_cached_blocks', 16 
+  );
+end;
+/
+
+-- need to regather table stats after increasing the Table_cached_blocks 
+exec dbms_stats.gather_table_stats ( null, '/*tbl name*/' ) ;
+
+--This adds linear clustering by INSERT_DATE. So the database will sort the rows by this column:
+alter table bricks
+  add clustering 
+  by linear order ( insert_date );
+  
+ --But this has no effect on existing data. Only rows added using direct-path inserts use this ordering. 
+ --To apply it to current rows, move the table:
+ select index_name, clustering_factor 
+from   user_indexes
+where  table_name = 'BRICKS';
+
+alter table bricks
+  move online;
+  
+exec dbms_stats.gather_table_stats ( null, 'bricks' ) ;
+
+select index_name, clustering_factor 
+from   user_indexes
+where  table_name = 'BRICKS';
+
+-- MATERIALISED views
+-- This creates an MV counting the number of rows for each colour:
+create materialized view brick_colours_mv
+as
+  select colour, count(*) 
+  from   bricks
+  group  by colour;
+  
+ -- Enable the MV to rewrite queries where it could be used to increase performance
+ alter materialized view <MV_name>
+  enable query rewrite;
+  
+-- check the status of Materialised views
+select mview_name, staleness 
+from   user_mviews;
+
+-- refresh a specific MV
+exec dbms_mview.refresh ( '/*mv name*/', 'C' );
+
+-- create a MV lof to allow FAST refreshed of the mv
+create materialized view log 
+  on bricks 
+  with primary key, rowid, sequence, commit scn ( 
+    colour, shape, weight, insert_date 
+  )
+  including new values;
+  
+ -- view the Mlog for the MV changes (By default this is named MLOG$_<tablename>)
+ select * from mlog$_<MV_name>;
+ 
+ -- alter the refresh frequency of a MV
+ alter materialized view <MV_name>
+  refresh fast on commit;
+  
+ -- dbms_scheduler jobto refresh MV's
+ BEGIN
+    DBMS_SCHEDULER.CREATE_JOB
+    (
+    job_name            => 'REFRESH_MY_VIEW',
+    job_type            => 'PLSQL_BLOCK',
+    job_action          => 'REFRESH_MY_VIEW',
+    number_of_arguments => 0,
+    start_date          => SYSTIMESTAMP, 
+    repeat_interval => 'freq=daily; byhour=8; byminute=0; bysecond=0;',
+    end_date            => NULL,
+    enabled             => TRUE,
+    auto_drop           => FALSE,
+    comments            => 'Refreshes MY_VIEW at 8am'
+    );
+END;
+/
+
+-- USING BULK PROCESSING 
+-- INSERTING VIA A LOOP IS SLOW SLOW SLOW
+-- DO NOT DO THIS 
+ for i in 1 .. 10000 loop 
+    insert into bricks  
+      values (  
+        i,  
+        case mod ( i, 3 )  
+          when 0 then 'red' 
+          when 1 then 'blue' 
+          when 2 then 'green' 
+        end, 
+        case mod ( i, 2 )  
+          when 0 then 'cube' 
+          when 1 then 'cylinder' 
+        end, 
+        round ( dbms_random.value ( 2, 10 ) ) 
+       ); 
+  end loop; 
+  
+-- it is much more efficent to write the values to an array and BULK PROCESS the array
+-- first construct an array to hold data
+declare
+  type bricks_rec is record (
+    brick_id integer, colour varchar2(10),
+    shape    varchar2(10), weight integer
+  );
+  type bricks_array is table of bricks_rec
+    index by pls_integer;
+    
+  brick_values bricks_array; -- create the array
+begin 
+  for i in 1 .. 10000 loop -- loop through values, saving the data to the array
+    brick_values ( i ) := bricks_rec (
+      brick_id => i + 20000, 
+      colour => case mod ( i, 3 )  
+        when 0 then 'red' 
+        when 1 then 'blue' 
+        when 2 then 'green' 
+      end, 
+      shape => case mod ( i, 2 )  
+        when 0 then 'cube' 
+        when 1 then 'cylinder' 
+      end, 
+      weight => round ( dbms_random.value ( 2, 10 ) ) 
+    );
+  end loop;
+  
+  forall rws in 1 .. brick_values.count -- this bulk process looks like a loop, but the DML is only exectuted ONCE
+    insert into bricks  
+    values brick_values ( rws );
+	
+	
+-- PARTITIONING A TABLE 
+alter table /*tbl_name*/ 
+  modify partition by range ( /*column*/ ) 
+  interval ( 10000 ) ( 
+    partition p0 values less than ( 10001 ),
+    partition p1 values less than ( 20001 ) 
+  ) online;
+ 
+ -- TRUNCATING a partition
+ alter table bricks 
+  truncate partition p1;
 
 -- HISTOGRAMS NOT CURRENTLY WORKING IN OUR SYSTEM
 -- THESE CAN BE USED TO OPTIMISE QUERIES WHEN ENABLED
