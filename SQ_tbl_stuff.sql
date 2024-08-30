@@ -1,3 +1,40 @@
+-- TABLE MANAGEMENT 
+
+-- Viewing Table Information
+-- The data dictionary stores information about your database. You can query this to see which tables it contains. 
+select table_name, iot_name, iot_type, external, 
+       partitioned, temporary, cluster_name
+from   user_tables;
+
+-- VIEW COLUMN Information
+select table_name, column_name, data_type, data_length, data_precision, data_scale
+from   user_tab_columns;
+
+
+-- Table Clusters
+-- A table cluster can store rows from many tables in the same physical location. To do this, first you must create the cluster:
+create cluster toy_cluster (
+  toy_name varchar2(100)
+);
+
+-- Then place your tables in it using the cluster clause of create table:
+create table toys_cluster_tab (
+  toy_name varchar2(100)
+) cluster toy_cluster ( toy_name );
+
+create table toy_owners_cluster_tab (
+  owner    varchar2(20),
+  toy_name varchar2(100)
+) cluster toy_cluster ( toy_name );
+
+-- You can view details of clusters by querying the *_clusters views
+select cluster_name from user_clusters;
+
+select table_name, cluster_name
+from   user_tables
+where  table_name in ( '/*TBL_NAMES*/' );
+
+
 /*-----------------------------------------------------------------------------
 create table
 ------------------------------------------------------------------------------*/
