@@ -14,6 +14,7 @@ SELECT table_name, constraint_name, status, owner
 FROM all_constraints
 WHERE constraint_type = 'R' -- R (referential integrity)
 --AND r_owner = :r_owner -- leave this out to get from all 'owners'
+--AND status = 'ENABLED' -- comment this back in to only show active constraints 
 AND r_constraint_name in
  (
    SELECT constraint_name 
