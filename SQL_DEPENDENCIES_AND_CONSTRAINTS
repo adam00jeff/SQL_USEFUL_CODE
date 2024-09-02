@@ -5,7 +5,32 @@ Not all code and snippets will relate directly to table dependencies and constra
 will be for the general area of SQL. 
 
 ----------------------------------------------------------------------------
-/*   script to find all references to a given table amongst other db tables
+SELECT *
+FROM all_cons_columns;
+-----------------------------------------------------------------------------
+SELECT * 
+FROM all_constraints;
+------------------------------------------------------------------------------
+/* script to find all column references to specific columns on other tables
+    TODO: ensure the results returned by this query is consistent with the expected 
+    results.
+*/
+SELECT *
+FROM all_cons_columns
+WHERE constraint_name IN (
+    SELECT c_pk.constraint_name
+      FROM all_cons_columns a
+      JOIN all_constraints c ON a.owner = c.owner
+                            AND a.constraint_name = c.constraint_name
+      JOIN all_constraints c_pk ON c.r_owner = c_pk.owner
+                               AND c.r_constraint_name = c_pk.constraint_name
+     WHERE c.constraint_type = 'R' -- R (referential integrity)
+       AND a.table_name = '<table>'
+--     AND a.column_name = '<column>'       
+)
+;
+------------------------------------------------------------------------
+/*   script to find all references to a given table amongst OTHER db tables
      replace <table> with desired table to check
      r_owner can be commentd back in if limiting to specific schems/user is required
  */
@@ -20,6 +45,9 @@ AND r_constraint_name in
    SELECT constraint_name 
    FROM all_constraints
    WHERE constraint_type in ('P', 'U') -- P (primary key), U (unique key)
-   AND table_name = -- <table> 
+   AND table_name = '<table>'
  )
-ORDER BY table_name, constraint_name
+ORDER BY table_name, constraint_name;
+
+
+
