@@ -1,0 +1,24 @@
+These scripts and code snippets are for the management and diagnosis of various SQL and PL/SQL constraints,
+dependencies etc, checking tables for references and views based on columns etc.
+
+Not all code and snippets will relate directly to table dependencies and constraints but the code included here
+will be for the general area of SQL. 
+
+----------------------------------------------------------------------------
+/*   script to find all references to a given table amongst other db tables
+     replace <table> with desired table to check
+     r_owner can be commentd back in if limiting to specific schems/user is required
+ */
+
+SELECT table_name, constraint_name, status, owner
+FROM all_constraints
+WHERE constraint_type = 'R' -- R (referential integrity)
+--AND r_owner = :r_owner -- leave this out to get from all 'owners'
+AND r_constraint_name in
+ (
+   SELECT constraint_name 
+   FROM all_constraints
+   WHERE constraint_type in ('P', 'U') -- P (primary key), U (unique key)
+   AND table_name = -- <table> 
+ )
+ORDER BY table_name, constraint_name
