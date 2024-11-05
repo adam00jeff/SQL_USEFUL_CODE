@@ -1,0 +1,6 @@
+Including Page Values in APEX items e.g. an Alertify Plugin 
+-------------------------------------------------------------------------------------------------------
+Static substitution: replaces a placeholder during rendering of the page - e.g. &amp;P30_PROMPT_RESULT.
+Dynamic substitution: replaces a placeholder with the current value of the browser - e.g. #P30_PROMPT_RESULT#
+
+
