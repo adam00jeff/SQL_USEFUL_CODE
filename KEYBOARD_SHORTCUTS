@@ -1,0 +1,15 @@
+Oracle SQL Developer Keyboard Shortcuts
+      • Run
+o Run Query – Ctrl+Enter or F9
+o Run Script – F5
+      • Navigate
+o Arrow keys – up/down/left/right
+o Home – Beginning of line
+o End – End of line
+o Go to Results – Alt + Page Down
+o Go to Editor – Alt + Page Up
+o Next Document – Ctrl + F6
+o Find Data – Ctrl + F
+      • Others
+o Toggle Comment – Ctrl + /
+o Format Query – Ctrl + F7
